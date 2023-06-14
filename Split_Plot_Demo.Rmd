@@ -1,0 +1,147 @@
+---
+title: "Split Plot Designs"
+author: "Jonathen, Melissa & Tiffany"
+date: "5/24/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(agridat) #dataset
+library(tidyverse)
+library(dplyr)
+library(ggpubr) #graph/normality check
+library(lawstat)
+library(desplot) #graph
+library(nlme) #modeling/ANOVA
+library(lmerTest) #modeling/ANOVA
+library(MASS)
+```
+# Introduction and Set-Up
+
+Split plot designs are a variation of factorial ANOVA that account for the fact that one of the predictor variables is hard to randomize. In this dataset, we'll be looking at a split plot experiment by Durban et al. from a study published in 2003 of barley with fungicide treatments. Crops grown at the Scottish Crop Research Institute were broken up in to 4 main blocks with 2 fungal treatments and 70 barley genotypes randomized across those blocks with crop yield being the outcome variable.
+
+yield - tonnes/ha
+block - 4 levels (4 groups)
+gen - genotype - 70 levels (70 genotypes)
+fung - fungicide - 2 levels (1/0 treated)
+row - row (of crop field)
+bed - column (of crop field)
+
+Fitting with the standard experimental design of a split-plot:
+- whole-plot: block
+- sub-plot: fung
+- sub-sub-plot: gen
+
+# Loading Dataset
+```{r data}
+# read in data from agridat library
+data("durban.splitplot")
+durban <- durban.splitplot
+str(durban) # to double check our variables are of the right type
+
+head(durban)
+```
+# Exploring the Data
+
+Now that we've read in our data, we want to explore the data to get a sense for what we have to work with. We know that yield is our outcome variable. So let's order the data in descending order with yield.
+
+```{r data_exploration1}
+# set up agr order as a tibble (tbl_df vs df)
+agr_order = as_tibble(durban)
+
+# reorder levels from high to low yield
+arrange(agr_order, desc(yield))
+
+```
+It seems we have a noticeable trend where fungicide treatment 'F1' has the higher crop yield. To make sure, let's do a group by and then average to see.
+
+```{r data_exploration2} 
+# checking averages of yield grouped by fungus treatment
+by_yield <- agr_order %>% group_by(fung) %>%
+  summarise_at(vars(yield), list(mean = mean))
+by_yield
+
+mean.plot <- ggplot(data=agr_order,aes(x=yield,fill=fung)) + geom_histogram(binwidth=0.1) + geom_vline(data=by_yield,aes(xintercept=mean,color=fung),linetype="dashed")
+mean.plot
+```
+
+# Visualizing Our Data
+
+Here's a general sense of how the plots are set-up
+
+```{r desplot}
+desplot(durban, yield~bed*row,col=fung,
+        out1=block,out2=gen,out2.gpar=list(col="gray50",lwd=1,lty=1),main="splitplot")
+```
+
+We can also visualize the differences in means based on different groupings: block vs. fungal treatment, block vs. barley genotype, fungal treatment vs. barley genotype
+
+```{r}
+interaction.plot(durban$block, durban$fung, durban$yield)
+interaction.plot(durban$gen, durban$block, durban$yield)
+interaction.plot(durban$gen, durban$fung, durban$yield)
+```
+
+
+# Normality and Variance
+Like a standard factorial ANOVA, there is an assumption that the data is normally distributed within groups (assessed visually with a qq-plot).
+
+```{r normality}
+# normality tests
+
+# whole plot level
+ggqqplot(data=durban,x='yield',facet.by='block')
+# sub-plot level
+ggqqplot(data=durban,x='yield') + facet_grid(block~fung)
+```
+
+There is also an assumption that there is an equality of variance between groups
+
+```{r variance}
+# equality of variances
+
+# whole plot level
+levene.test(durban$yield,durban$block)
+
+#sub plot level - block & fung
+
+durban.var <- durban[order(durban$block,durban$fung),]
+rownames(durban.var) <- 1:560
+# copy of data set with a grouping variable for block AND fungal treatment
+
+durban.var$fung.cell <- rep(seq(1,8,by=1),each=70)
+levene.test(durban.var$yield,durban.var$fung.cell)
+```
+
+# Model Fitting
+
+First, we want to run an ANOVA ignoring the experimental design. 
+```{r bad model}
+model.bad <- aov(yield ~ fung*gen,data=durban)
+summary(model.bad)
+```
+The residuals/error degrees of freedom is higher, especially in comparison to the degrees of freedom that can be used to test for differences in the sub-plot factor fungal treatment.
+
+In order to account for our experimental design, an additional term needs to be added into the formula specifying an error term for fungal treatment - in the form of Error(whole plot:spilt plot).
+
+```{r anova w/ error}
+model.good <- aov(yield ~ fung*gen + Error(block:fung),data=durban)
+summary(model.good)
+```
+
+There is an additional way to run an analysis that accounts for a split-plot design which is the lmer() function from the lme4 package. Instead of the Error(whole plot:sub-plot) term added to the aov() function, the additional term specified would be indicated with (1|whole plot:sub-plot).
+
+Also we want to use the anova() function rather than summary() to display our results in a readable manner.
+
+```{r lmer test}
+model.lmer <- lmer(yield ~ fung*gen + (1|block:fung),data=durban)
+anova(model.lmer)
+```
+
+If you compare both models, you can see that our p-values are just about the same, as well the degrees of freedom both for predictors/interactions and residuals
+
+# Interpreting Results
+
+In reviewing the results of our analyses, we found significant main effects for both fungal treatment type and barley genotype, but no significant interaction for fungal treatments & barley genotype together.
+
